@@ -148,8 +148,8 @@ func receiver(ws *websocket.Conn) {
 }
 
 func main() {
-	origin := "http://localhost/"
-	url := "ws://localhost:12345/websocket"
+	origin := "http://n6bagent-c9-tiancaiamao.c9.io/"
+	url := "ws://n6bagent-c9-tiancaiamao.c9.io:80/websocket"
 
 	ws, err := websocket.Dial(url, "", origin)
 	if err != nil {
