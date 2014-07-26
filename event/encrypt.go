@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rc4"
 	"errors"
+	"log"
 	"strconv"
 )
 
@@ -91,7 +92,11 @@ func (ev *EncryptEventV2) Encode(buffer *bytes.Buffer) {
 	case ENCRYPTER_RC4:
 		EncodeUInt64Value(buffer, uint64(buf.Len()))
 		dst := make([]byte, buf.Len())
-		cipher, _ := rc4.NewCipher([]byte(rc4Key))
+		cipher, err := rc4.NewCipher([]byte(rc4Key))
+		if err != nil {
+			log.Println("...............................")
+			break
+		}
 		cipher.XORKeyStream(dst, buf.Bytes())
 		buffer.Write(dst)
 	}

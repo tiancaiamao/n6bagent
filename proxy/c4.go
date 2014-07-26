@@ -419,7 +419,7 @@ func RegisteRemoteConnManager(connManager RemoteConnectionManager) {
 	registedRemoteConnManager[connManager.GetName()] = connManager
 }
 
-func (manager *C4) init() error {
+func (manager *C4) Init() error {
 	logined = false
 	if ifs, err := net.Interfaces(); nil == err {
 		for _, itf := range ifs {

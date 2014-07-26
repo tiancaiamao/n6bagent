@@ -6,10 +6,11 @@ import (
 	"encoding/base64"
 	"fmt"
 	"github.com/tiancaiamao/n6bagent/event"
-	//"io/ioutil"
+	// "io"
 	"log"
 	"net/http"
 	"net/url"
+	// "os"
 	"strings"
 	"sync"
 	"time"
@@ -148,13 +149,14 @@ func (p *pullWorker) loop() {
 			req.Header.Set("User-Agent", c4_cfg.UA)
 		}
 		log.Printf("Pull worker[%s]:%d start working\n", p.server.Host, p.index)
+
 		resp, err := c4HttpClient.Do(req)
 
 		if nil != err || resp.StatusCode != 200 {
 			log.Printf("Pull worker[%s]:%d recv invalid res:%v\n", p.server.Host, p.index, resp)
 			time.Sleep(1 * time.Second)
 		} else {
-			//log.Printf("Got chunked %v %v\n", resp.TransferEncoding, resp.Header)
+			log.Printf("Got chunked %v %v\n", resp.TransferEncoding, resp.Header)
 			cumulate.fillContent(resp.Body)
 		}
 		if nil != resp && nil != resp.Body {

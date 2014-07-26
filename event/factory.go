@@ -64,7 +64,7 @@ func NewEventInstance(event_type, event_version uint32) (err error, ev Event) {
 	return
 }
 
-func init() {
+func Init() {
 	RegistEvent(&AuthRequestEvent{})
 	RegistEvent(&AuthResponseEvent{})
 	RegistEvent(&EncryptEvent{})

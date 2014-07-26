@@ -7,7 +7,7 @@ var c4_cfg *C4Config = &C4Config{
 	Encrypter:              event.ENCRYPTER_RC4,
 	UA:                     "Mozilla/5.0 (Windows NT 6.1; WOW64; rv:15.0) Gecko/20100101 Firefox/15.0.1",
 	ReadTimeout:            25,
-	MaxConn:                5,
+	MaxConn:                1,
 	WSConnKeepAlive:        180,
 	InjectRange:            initHostMatchRegex("*.c.youtube.com|av.vimeo.com|av.voanews.com"),
 	FetchLimitSize:         256000,
