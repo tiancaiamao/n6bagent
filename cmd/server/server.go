@@ -34,11 +34,11 @@ func worker(session uint32, r *http.Request, w chan<- []byte) {
 	log.Printf("SESSION %d BEGIN: %s %s\n", session, r.Method, r.URL.String())
 
 	resp, err := http.DefaultClient.Do(r)
-	defer resp.Body.Close()
 	if err != nil {
 		log.Println("client.Do error:", err)
 		return
 	}
+	defer resp.Body.Close()
 
 	buf := &bytes.Buffer{}
 	binary.Write(buf, binary.LittleEndian, session)

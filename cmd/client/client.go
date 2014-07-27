@@ -97,76 +97,67 @@ const (
 	CONTENT
 )
 
-func receiver(ws *websocket.Conn) {
-	buf := &bytes.Buffer{}
-
+func readSession(ws *websocket.Conn, buf *bytes.Buffer) (uint32, error) {
 	var session uint32
 	var size uint16
 
+	err := binary.Read(ws, binary.LittleEndian, &session)
+	if err != nil {
+		return 0, err
+	}
+	binary.Read(ws, binary.LittleEndian, &size)
+	if err != nil {
+		return 0, err
+	}
+
+	buf.Reset()
+	_, err = io.CopyN(buf, ws, int64(size))
+	if err != nil {
+		return 0, err
+	}
+	return session, nil
+}
+
+func receiver(ws *websocket.Conn) {
+	buf := &bytes.Buffer{}
 	for {
-		_, err := io.CopyN(buf, ws, 4)
+		session, err := readSession(ws, buf)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal("readSession error: ", err)
 		}
-		binary.Read(buf, binary.LittleEndian, &session)
-		buf.Reset()
 
-		_, err = io.CopyN(buf, ws, 2)
+		c, err := Res.Del(session)
 		if err != nil {
-			log.Fatal(err)
+			log.Printf("session %d not exist!!!", session)
+			continue
 		}
-		binary.Read(buf, binary.LittleEndian, &size)
-		buf.Reset()
 
-		_, err = io.CopyN(buf, ws, int64(size))
-		if err == nil {
-			// log.Println("get a response...")
-			c, err := Res.Del(session)
-			if err == nil {
-				bufreader := bufio.NewReader(buf)
-				resp, err := http.ReadResponse(bufreader, c.r)
-				if err == nil {
-					for k, v := range resp.Header {
-						for _, vv := range v {
-							c.w.Header().Add(k, vv)
-						}
-					}
+		bufreader := bufio.NewReader(buf)
+		resp, err := http.ReadResponse(bufreader, c.r)
+		if err != nil {
+			log.Printf("read response error!!!!")
+			c.c <- struct{}{}
+			continue
+		}
 
-					// c.w.WriteHeader(resp.StatusCode)
-					result, err := ioutil.ReadAll(resp.Body)
-					if err != nil && err != io.EOF {
-						log.Println("是否是运行到这里?", err)
-					}
-					c.w.Write(result)
-
-					if err != nil {
-						log.Println("写回resp错误：", err)
-					}
-
-					// fmt.Fprintf(c.w, "hello world")
-
-				} else {
-					log.Printf("read response error!!!!")
-				}
-
-				// fmt.Fprintf(w, "Welcome to the home page!")
-
-				// io.Copy(os.Stdout, buf)
-				// log.Println("run here...")
-
-				// fmt.Fprintf(c.w, "hello world.....\n")
-				// io.Copy(c.w, buf)
-				c.c <- struct{}{}
-
-				// _, err = io.Copy(c.w, buf)
-				// if err != nil {
-				// log.Println("send to browser error:", err)
-				// }
-			} else {
-				log.Printf("session %d not exist!!!", session)
+		for k, v := range resp.Header {
+			for _, vv := range v {
+				c.w.Header().Add(k, vv)
 			}
 		}
-		buf.Reset()
+
+		result, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Println("读Body也可以出错?", err)
+			c.c <- struct{}{}
+			continue
+		}
+
+		c.w.Write(result)
+		if err != nil {
+			log.Println("写回resp错误：", err)
+		}
+		c.c <- struct{}{}
 	}
 }
 
