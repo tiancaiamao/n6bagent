@@ -53,15 +53,15 @@ func (r *Result) Del(session uint32) (*Cell, error) {
 
 func Handler(w http.ResponseWriter, r *http.Request) {
 	sessionID := atomic.AddUint32(&session, 1)
-	log.Printf("SESSION %d BEGIN: %s %s%s\n", sessionID, r.Method, r.Host, r.URL.String())
+	log.Printf("SESSION %d BEGIN: %s %s\n", sessionID, r.Method, r.URL.String())
 
 	buf := &bytes.Buffer{}
 	binary.Write(buf, binary.LittleEndian, sessionID)
-	binary.Write(buf, binary.LittleEndian, uint16(0))
+	binary.Write(buf, binary.LittleEndian, uint32(0))
 	r.Write(buf)
 
 	b := buf.Bytes()
-	binary.LittleEndian.PutUint16(b[4:], uint16(len(b)-6))
+	binary.LittleEndian.PutUint32(b[4:], uint32(len(b)-8))
 
 	wait := make(chan struct{})
 	// 等待返回结束
@@ -99,7 +99,7 @@ const (
 
 func readSession(ws *websocket.Conn, buf *bytes.Buffer) (uint32, error) {
 	var session uint32
-	var size uint16
+	var size uint32
 
 	err := binary.Read(ws, binary.LittleEndian, &session)
 	if err != nil {
@@ -111,6 +111,7 @@ func readSession(ws *websocket.Conn, buf *bytes.Buffer) (uint32, error) {
 	}
 
 	buf.Reset()
+	log.Printf("session %d size = %d\n", session, size)
 	_, err = io.CopyN(buf, ws, int64(size))
 	if err != nil {
 		return 0, err
@@ -167,12 +168,12 @@ var (
 )
 
 func main() {
-	// origin := "http://n6bagent-c9-tiancaiamao.c9.io/"
-	// url := "ws://n6bagent-c9-tiancaiamao.c9.io:80/websocket"
+	origin := "http://n6bagent-c9-tiancaiamao.c9.io/"
+	url := "ws://n6bagent-c9-tiancaiamao.c9.io:80/websocket"
 
-	origin := "http://localhost/"
-	url := "ws://localhost:8080/websocket"
-
+	// origin := "http://localhost/"
+	// url := "ws://localhost:8080/websocket"
+	
 	ws, err := websocket.Dial(url, "", origin)
 	if err != nil {
 		log.Fatal(err)

@@ -42,14 +42,14 @@ func worker(session uint32, r *http.Request, w chan<- []byte) {
 
 	buf := &bytes.Buffer{}
 	binary.Write(buf, binary.LittleEndian, session)
-	binary.Write(buf, binary.LittleEndian, uint16(0))
+	binary.Write(buf, binary.LittleEndian, uint32(0))
 
 	resp.Write(buf)
 
-	log.Printf("SESSION %d END\n", session)
+	log.Printf("SESSION %d END size=%d\n", session, buf.Len()-8)
 
 	data := buf.Bytes()
-	binary.LittleEndian.PutUint16(data[4:], uint16(len(data)-6))
+	binary.LittleEndian.PutUint32(data[4:], uint32(len(data)-8))
 
 	w <- data
 }
@@ -66,14 +66,22 @@ func websocketCallback(ws *websocket.Conn) {
 	buf := &bytes.Buffer{}
 
 	var session uint32
-	var size uint16
+	var size uint32
 
 	for {
-		binary.Read(ws, binary.LittleEndian, &session)
-		binary.Read(ws, binary.LittleEndian, &size)
+		err := binary.Read(ws, binary.LittleEndian, &session)
+		if err != nil {
+			ws.Close()
+			return
+		}
+		err = binary.Read(ws, binary.LittleEndian, &size)
+		if err != nil {
+			ws.Close()
+			return
+		}
 
 		buf.Reset()
-		_, err := io.CopyN(buf, ws, int64(size))
+		_, err = io.CopyN(buf, ws, int64(size))
 		if err != nil {
 			log.Println("read websocket error:", session, err)
 			continue
@@ -93,7 +101,6 @@ func websocketCallback(ws *websocket.Conn) {
 }
 
 func main() {
-	// loop()
 	http.HandleFunc("/", indexCallback)
 	http.Handle("/websocket", websocket.Handler(websocketCallback))
 	http.HandleFunc("/pprof/goroutine", debugCallback("goroutine"))
