@@ -6,12 +6,12 @@ import (
 	"code.google.com/p/go.net/websocket"
 	"encoding/binary"
 	"errors"
+	// "fmt"
 	"io"
 	"io/ioutil"
-	// "fmt"
 	"log"
 	"net/http"
-	"os"
+	// "os"
 	"sync"
 	"sync/atomic"
 )
@@ -52,9 +52,8 @@ func (r *Result) Del(session uint32) (*Cell, error) {
 }
 
 func Handler(w http.ResponseWriter, r *http.Request) {
-	log.Println("get a request: ")
-	r.Write(os.Stdout)
 	sessionID := atomic.AddUint32(&session, 1)
+	log.Printf("SESSION %d BEGIN: %s %s%s\n", sessionID, r.Method, r.Host, r.URL.String())
 
 	buf := &bytes.Buffer{}
 	binary.Write(buf, binary.LittleEndian, sessionID)
@@ -72,7 +71,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	Ch <- b
 	<-wait
-	log.Println("func returned!!!!!!!!")
+	log.Printf("SESSION %d END\n", sessionID)
 }
 
 func sender(ws *websocket.Conn) {
@@ -121,7 +120,7 @@ func receiver(ws *websocket.Conn) {
 
 		_, err = io.CopyN(buf, ws, int64(size))
 		if err == nil {
-			log.Println("get a response...")
+			// log.Println("get a response...")
 			c, err := Res.Del(session)
 			if err == nil {
 				bufreader := bufio.NewReader(buf)
@@ -133,12 +132,19 @@ func receiver(ws *websocket.Conn) {
 						}
 					}
 
-					c.w.WriteHeader(resp.StatusCode)
+					// c.w.WriteHeader(resp.StatusCode)
 					result, err := ioutil.ReadAll(resp.Body)
 					if err != nil && err != io.EOF {
 						log.Println("是否是运行到这里?", err)
 					}
 					c.w.Write(result)
+
+					if err != nil {
+						log.Println("写回resp错误：", err)
+					}
+
+					// fmt.Fprintf(c.w, "hello world")
+
 				} else {
 					log.Printf("read response error!!!!")
 				}
@@ -157,7 +163,7 @@ func receiver(ws *websocket.Conn) {
 				// log.Println("send to browser error:", err)
 				// }
 			} else {
-				log.Printf("session not exist!!!")
+				log.Printf("session %d not exist!!!", session)
 			}
 		}
 		buf.Reset()

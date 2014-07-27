@@ -9,7 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
+	// "os"
 	"runtime/pprof"
 	// "time"
 )
@@ -30,44 +30,31 @@ func debugCallback(name string) func(http.ResponseWriter, *http.Request) {
 	}
 }
 
-const (
-	SESSION = iota
-	SIZE
-	CONTENT
-)
+func worker(session uint32, r *http.Request, w chan<- []byte) {
+	log.Printf("SESSION %d BEGIN: %s %s\n", session, r.Method, r.URL.String())
 
-type Session struct {
-	SessionID uint32
-	Request   chan []byte
-	data      []byte
-}
-
-// session implement io.Reader
-func (s *Session) Read(p []byte) (int, error) {
-	if len(s.data) >= len(p) {
-		copy(p, s.data)
-		s.data = s.data[len(p):]
-		return len(p), nil
-	}
-
-	copy(p, s.data)
-	data, ok := <-s.Request
-	if !ok {
-		return len(s.data), io.EOF
-	}
-	s.data = data
-	log.Println("run here...")
-	n, err := s.Read(p[len(s.data):])
+	resp, err := http.DefaultClient.Do(r)
+	defer resp.Body.Close()
 	if err != nil {
-		return n + len(s.data), err
+		log.Println("client.Do error:", err)
+		return
 	}
 
-	return n + len(s.data), nil
+	buf := &bytes.Buffer{}
+	binary.Write(buf, binary.LittleEndian, session)
+	binary.Write(buf, binary.LittleEndian, uint16(0))
+
+	resp.Write(buf)
+
+	log.Printf("SESSION %d END\n", session)
+
+	data := buf.Bytes()
+	binary.LittleEndian.PutUint16(data[4:], uint16(len(data)-6))
+
+	w <- data
 }
 
 func websocketCallback(ws *websocket.Conn) {
-	// table := make(map[uint32]*Session)
-
 	ch := make(chan []byte)
 	go func(c <-chan []byte) {
 		for {
@@ -76,71 +63,32 @@ func websocketCallback(ws *websocket.Conn) {
 		}
 	}(ch)
 
-	var buf [8192]byte
-
-	state := SESSION //读头部；读内容
-	remain := 4      //剩余字节数
-	readn := 0
+	buf := &bytes.Buffer{}
 
 	var session uint32
 	var size uint16
 
 	for {
-		for readn != remain {
-			n, err := ws.Read(buf[readn:remain])
-			if err != nil {
-				log.Println("Read session error: ", err)
-			}
-			readn += n
+		binary.Read(ws, binary.LittleEndian, &session)
+		binary.Read(ws, binary.LittleEndian, &size)
+
+		buf.Reset()
+		_, err := io.CopyN(buf, ws, int64(size))
+		if err != nil {
+			log.Println("read websocket error:", session, err)
+			continue
 		}
 
-		switch state {
-		case SESSION:
-			session = binary.LittleEndian.Uint32(buf[:])
-			state = SIZE
-			remain = 2
-			readn = 0
-		case SIZE:
-			size = binary.LittleEndian.Uint16(buf[:])
-			state = CONTENT
-			remain = int(size)
-			readn = 0
-		case CONTENT:
-			go func(sid uint32, request []byte, c chan<- []byte) {
-				b := bytes.NewBuffer(request)
-				bufreader := bufio.NewReader(b)
-				req, err := http.ReadRequest(bufreader)
-				if err != nil {
-					log.Println("read request error:", session, err)
-					return
-				}
-				req.URL, err = url.Parse("http://" + req.Host + req.URL.String())
-				req.RequestURI = ""
-				req.Write(os.Stdout)
-
-				resp, err := http.DefaultClient.Do(req)
-				defer resp.Body.Close()
-				if err != nil {
-					log.Println("client.Do error:", err)
-					return
-				}
-
-				buf := &bytes.Buffer{}
-				binary.Write(buf, binary.LittleEndian, session)
-				binary.Write(buf, binary.LittleEndian, uint16(0))
-
-				resp.Write(buf)
-
-				data := buf.Bytes()
-				binary.LittleEndian.PutUint16(data[4:], uint16(len(data)-6))
-
-				c <- data
-			}(session, buf[:size], ch)
-
-			state = SESSION
-			remain = 4
-			readn = 0
+		bufreader := bufio.NewReader(buf)
+		req, err := http.ReadRequest(bufreader)
+		if err != nil {
+			log.Println("read request error:", session, err)
+			continue
 		}
+		req.URL, err = url.Parse("http://" + req.Host + req.URL.String())
+		req.RequestURI = ""
+
+		go worker(session, req, ch)
 	}
 }
 
