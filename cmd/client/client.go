@@ -1,13 +1,13 @@
 package main
 
 import (
-	// "bufio"
+	"bufio"
 	"bytes"
 	"code.google.com/p/go.net/websocket"
 	"encoding/binary"
 	"errors"
 	"io"
-	// "io/ioutil"
+	"io/ioutil"
 	// "fmt"
 	"log"
 	"net/http"
@@ -20,6 +20,7 @@ var session uint32
 
 type Cell struct {
 	w http.ResponseWriter
+	r *http.Request
 	c chan struct{}
 }
 type Result struct {
@@ -66,7 +67,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	wait := make(chan struct{})
 	// 等待返回结束
 	Res.Put(sessionID, &Cell{
-		w, wait,
+		w, r, wait,
 	})
 
 	Ch <- b
@@ -123,35 +124,32 @@ func receiver(ws *websocket.Conn) {
 			log.Println("get a response...")
 			c, err := Res.Del(session)
 			if err == nil {
-				// bufreader := bufio.NewReader(buf)
-				// resp, err := http.ReadResponse(bufreader, c.r)
-				// if err == nil {
-				// 	log.Println("get a response:")
-				// 	resp.Write(os.Stdout)
-				//
-				// 	for k, v := range resp.Header {
-				// 		for _, vv := range v {
-				// 			c.w.Header().Add(k, vv)
-				// 		}
-				// 	}
-				//
-				// 	// c.w.WriteHeader(resp.StatusCode)
-				// 	result, err := ioutil.ReadAll(resp.Body)
-				// 	if err != nil && err != io.EOF {
-				// 		log.Println("是否是运行到这里?", err)
-				// 	}
-				// 	c.w.Write(result)
-				// } else {
-				// 	log.Printf("read response error!!!!")
-				// }
+				bufreader := bufio.NewReader(buf)
+				resp, err := http.ReadResponse(bufreader, c.r)
+				if err == nil {
+					for k, v := range resp.Header {
+						for _, vv := range v {
+							c.w.Header().Add(k, vv)
+						}
+					}
+
+					c.w.WriteHeader(resp.StatusCode)
+					result, err := ioutil.ReadAll(resp.Body)
+					if err != nil && err != io.EOF {
+						log.Println("是否是运行到这里?", err)
+					}
+					c.w.Write(result)
+				} else {
+					log.Printf("read response error!!!!")
+				}
 
 				// fmt.Fprintf(w, "Welcome to the home page!")
 
 				// io.Copy(os.Stdout, buf)
-				log.Println("run here...")
+				// log.Println("run here...")
 
 				// fmt.Fprintf(c.w, "hello world.....\n")
-				io.Copy(c.w, buf)
+				// io.Copy(c.w, buf)
 				c.c <- struct{}{}
 
 				// _, err = io.Copy(c.w, buf)

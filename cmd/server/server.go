@@ -125,11 +125,10 @@ func websocketCallback(ws *websocket.Conn) {
 					return
 				}
 
-				log.Println("contentLength is :", resp.ContentLength)
-
 				buf := &bytes.Buffer{}
 				binary.Write(buf, binary.LittleEndian, session)
 				binary.Write(buf, binary.LittleEndian, uint16(0))
+
 				resp.Write(buf)
 
 				data := buf.Bytes()
