@@ -1,117 +1,82 @@
 package main
 
 import (
-	"bufio"
+	// "bufio"
+	"bytes"
 	"code.google.com/p/go.net/websocket"
 	"encoding/binary"
-	"github.com/tiancaiamao/n6bagent/protocol"
+	"errors"
 	"io"
+	// "io/ioutil"
 	"log"
-	"net"
 	"net/http"
-	"strings"
+	"os"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
-type Session struct {
-	SessionID uint32
-	RawReq    *http.Request
-	Conn      *net.TCPConn
-	Https     bool
-}
-
-type SessionManager struct {
-	seed uint32
-	kv   map[uint32]*Session
-	sync.Mutex
-}
-
-func NewSessionManager() *SessionManager {
-	ret := new(SessionManager)
-	ret.kv = make(map[uint32]*Session)
-	return ret
-}
-
-func (m *SessionManager) NewSession(conn *net.TCPConn) *Session {
-	sessionID := atomic.AddUint32(&m.seed, 1)
-
-	bufreader := bufio.NewReader(conn)
-	b, err := bufreader.Peek(7)
-	if nil != err {
-		if err != io.EOF {
-			log.Printf("Failed to peek data:%s\n", err.Error())
-		}
-		conn.Close()
-		return nil
-	}
-
-	ret := &Session{
-		SessionID: sessionID,
-		Conn:      conn,
-	}
-
-	if strings.EqualFold(string(b), "Connect") {
-		ret.Https = true
-	}
-
-	conn.SetReadDeadline(time.Now().Add(1 * time.Second))
-	req, err := http.ReadRequest(bufreader)
-	if nil != req {
-		req.Header.Del("Proxy-Connection")
-	}
-	if err != nil {
-		conn.Close()
-		return nil
-	}
-	var zero time.Time
-	conn.SetReadDeadline(zero)
-
-	ret.RawReq = req
-
-	m.Lock()
-	m.kv[sessionID] = ret
-	m.Unlock()
-
-	return ret
-}
-
-func (m *SessionManager) GetSession(sessionID uint32) *Session {
-	var ret *Session
-	m.Lock()
-	ret = m.kv[sessionID]
-	m.Unlock()
-
-	return ret
-}
-
-var RequestChannel chan protocol.HttpRequestEvent = make(chan protocol.HttpRequestEvent)
 var session uint32
 
-func handleConn(ws *websocket.Conn, conn net.Conn) {
-	sessionID := atomic.AddUint32(&session, 1)
-	var buf [8192]byte
+type Cell struct {
+	w http.ResponseWriter
+	r *http.Request
+}
+type Result struct {
+	sync.Mutex
+	kv map[uint32]Cell
+}
+
+func NewResult() *Result {
+	return &Result{
+		kv: make(map[uint32]Cell),
+	}
+}
+
+func (r *Result) Put(session uint32, w Cell) {
+	r.Lock()
+	r.kv[session] = w
+	r.Unlock()
+}
+
+func (r *Result) Del(session uint32) (Cell, error) {
+	r.Lock()
+	ret, ok := r.kv[session]
+	if !ok {
+		r.Unlock()
+		return Cell{}, errors.New("not exist")
+	}
+	r.Unlock()
+	return ret, nil
+}
+
+func NewHandler(ch chan<- []byte, finish *Result) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		log.Println("get a request: ")
+		r.Write(os.Stdout)
+		sessionID := atomic.AddUint32(&session, 1)
+
+		buf := &bytes.Buffer{}
+		binary.Write(buf, binary.LittleEndian, sessionID)
+		binary.Write(buf, binary.LittleEndian, uint16(0))
+		r.Write(buf)
+
+		b := buf.Bytes()
+		binary.LittleEndian.PutUint16(b[4:], uint16(len(b)-6))
+		finish.Put(sessionID, Cell{w, r})
+		ch <- b
+	}
+}
+
+func sender(ws *websocket.Conn, c <-chan []byte) {
 	for {
-		n, err := conn.Read(buf[6:])
-		if err != nil {
-			log.Println("handleConn Read error: ", err)
-			conn.Close()
-			return
-		}
+		buf := <-c
 
-		// sessionID + size + data
-		binary.LittleEndian.PutUint32(buf[:], sessionID)
-		binary.LittleEndian.PutUint16(buf[4:], uint16(n))
-
-		total := 6 + n
 		wn := 0
+		total := len(buf)
 		for wn != total {
 			n, err := ws.Write(buf[wn:total])
 			if err != nil {
-				log.Println("handleConn Read error: ", err)
-				ws.Close()
-				conn.Close()
+				log.Println("handleConn Write error: ", err)
 				return
 			}
 			wn += n
@@ -119,66 +84,86 @@ func handleConn(ws *websocket.Conn, conn net.Conn) {
 	}
 }
 
-func sender(ws *websocket.Conn) {
-	// enc := gob.NewEncoder(ws)
-	for {
-		ev, ok := <-RequestChannel
-		if !ok {
+const (
+	SESSION = iota
+	SIZE
+	CONTENT
+)
 
-		}
-		log.Printf("Session %d: %s %s", ev.SessionID, ev.RawReq.Method, ev.RawReq.URL)
-		// err := enc.Encode(ev)
-		// ws.Write([]byte("hello, world!\n"))
-		err := websocket.Message.Send(ws, ev)
-		if err != nil {
-			log.Printf("encode error...%v\n", err)
-		}
-	}
-}
+func receiver(ws *websocket.Conn, res *Result) {
+	buf := &bytes.Buffer{}
 
-func receiver(ws *websocket.Conn) {
-	var msg = make([]byte, 512)
+	var session uint32
+	var size uint16
+
 	for {
-		n, err := ws.Read(msg)
+		_, err := io.CopyN(buf, ws, 4)
 		if err != nil {
 			log.Fatal(err)
 		}
-		log.Printf("Received: %s.\n", msg[:n])
+		binary.Read(buf, binary.LittleEndian, &session)
+		buf.Reset()
+
+		_, err = io.CopyN(buf, ws, 2)
+		if err != nil {
+			log.Fatal(err)
+		}
+		binary.Read(buf, binary.LittleEndian, &size)
+		buf.Reset()
+
+		_, err = io.CopyN(buf, ws, int64(size))
+		c, err := res.Del(session)
+		if err == nil {
+			// bufreader := bufio.NewReader(buf)
+			// resp, err := http.ReadResponse(bufreader, c.r)
+			// if err == nil {
+			// 	log.Println("get a response:")
+			// 	resp.Write(os.Stdout)
+			//
+			// 	for k, v := range resp.Header {
+			// 		for _, vv := range v {
+			// 			c.w.Header().Add(k, vv)
+			// 		}
+			// 	}
+			//
+			// 	// c.w.WriteHeader(resp.StatusCode)
+			// 	result, err := ioutil.ReadAll(resp.Body)
+			// 	if err != nil && err != io.EOF {
+			// 		log.Println("是否是运行到这里?", err)
+			// 	}
+			// 	c.w.Write(result)
+			// } else {
+			// 	log.Printf("read response error!!!!")
+			// }
+
+			_, err = io.Copy(c.w, buf)
+			if err != nil {
+				log.Println("send to browser error:", err)
+			}
+		} else {
+			log.Printf("session not exist!!!")
+		}
+		buf.Reset()
 	}
 }
 
 func main() {
-	origin := "http://n6bagent-c9-tiancaiamao.c9.io/"
-	url := "ws://n6bagent-c9-tiancaiamao.c9.io:80/websocket"
+	// origin := "http://n6bagent-c9-tiancaiamao.c9.io/"
+	// url := "ws://n6bagent-c9-tiancaiamao.c9.io:80/websocket"
+
+	origin := "http://localhost/"
+	url := "ws://localhost:8080/websocket"
 
 	ws, err := websocket.Dial(url, "", origin)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// if _, err := ws.Write([]byte("hello, world!\n")); err != nil {
-	//		 log.Fatal(err)
-	//	 }
-	//	 var msg = make([]byte, 512)
-	//	 var n int
-	//	 if n, err = ws.Read(msg); err != nil {
-	//		 log.Fatal(err)
-	//	 }
-	//	 log.Printf("Received: %s.\n", msg[:n])
+	ch := make(chan []byte)
+	res := NewResult()
+	go sender(ws, ch)
+	go receiver(ws, res)
 
-	go sender(ws)
-	go receiver(ws)
-
-	fd, err := net.Listen("tcp", "localhost:48101")
-	if nil != err {
-		log.Fatal(err)
-	}
-
-	for {
-		conn, err := fd.Accept()
-		if nil != err {
-			continue
-		}
-		go handleConn(ws, conn)
-	}
+	http.HandleFunc("/", NewHandler(ch, res))
+	http.ListenAndServe(":48101", nil)
 }

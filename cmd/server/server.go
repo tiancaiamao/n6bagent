@@ -2,12 +2,13 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"code.google.com/p/go.net/websocket"
 	"encoding/binary"
-	"errors"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime/pprof"
 	// "time"
@@ -52,7 +53,7 @@ func (s *Session) Read(p []byte) (int, error) {
 	copy(p, s.data)
 	data, ok := <-s.Request
 	if !ok {
-		return len(s.data), errors.New("read error: channel closed!")
+		return len(s.data), io.EOF
 	}
 	s.data = data
 	log.Println("run here...")
@@ -65,7 +66,15 @@ func (s *Session) Read(p []byte) (int, error) {
 }
 
 func websocketCallback(ws *websocket.Conn) {
-	table := make(map[uint32]*Session)
+	// table := make(map[uint32]*Session)
+
+	ch := make(chan []byte)
+	go func(c <-chan []byte) {
+		for {
+			data := <-c
+			ws.Write(data)
+		}
+	}(ch)
 
 	var buf [8192]byte
 
@@ -97,34 +106,37 @@ func websocketCallback(ws *websocket.Conn) {
 			remain = int(size)
 			readn = 0
 		case CONTENT:
-			s, ok := table[session]
-			if !ok {
-				s = new(Session)
-				s.SessionID = session
-				s.Request = make(chan []byte)
-				table[session] = s
-				go func(ws *websocket.Conn, session *Session) {
-					bufreader := bufio.NewReader(session)
-					req, err := http.ReadRequest(bufreader)
-					if err != nil {
-						log.Println("read request error:", err)
-						return
-					}
-					log.Println("parse a request:", req)
+			go func(sid uint32, request []byte, c chan<- []byte) {
+				b := bytes.NewBuffer(request)
+				bufreader := bufio.NewReader(b)
+				req, err := http.ReadRequest(bufreader)
+				if err != nil {
+					log.Println("read request error:", session, err)
+					return
+				}
+				req.URL, err = url.Parse("http://" + req.Host + req.URL.String())
+				req.RequestURI = ""
+				req.Write(os.Stdout)
 
-					var client http.Client
-					resp, err := client.Do(req)
-					if err != nil {
-						log.Println("client.Do error:", err)
-						return
-					}
+				resp, err := http.DefaultClient.Do(req)
+				defer resp.Body.Close()
+				if err != nil {
+					log.Println("client.Do error:", err)
+					return
+				}
 
-					resp.Write(os.Stdout)
-				}(ws, s)
-			}
+				log.Println("contentLength is :", resp.ContentLength)
 
-			s.Request <- buf[:size]
-			log.Println("receive a request: ", session, string(buf[:size]))
+				buf := &bytes.Buffer{}
+				binary.Write(buf, binary.LittleEndian, session)
+				binary.Write(buf, binary.LittleEndian, uint16(0))
+				resp.Write(buf)
+
+				data := buf.Bytes()
+				binary.LittleEndian.PutUint16(data[4:], uint16(len(data)-6))
+
+				c <- data
+			}(session, buf[:size], ch)
 
 			state = SESSION
 			remain = 4
@@ -142,7 +154,7 @@ func main() {
 	http.HandleFunc("/pprof/threadcreate", debugCallback("threadcreate"))
 	http.HandleFunc("/pprof/block", debugCallback("block"))
 
-	err := http.ListenAndServe(":12345", nil)
+	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err.Error())
 	}
