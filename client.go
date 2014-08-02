@@ -13,7 +13,6 @@ import (
     "net/http"
     // "os"
     "sync"
-    "sync/atomic"
 )
 
 type Cell struct {
@@ -144,11 +143,9 @@ func NewClient(hostAddr string) (*Client, error) {
         return nil, err
     }
 
-    multiplex := NewStreamMultiplex(ws)
-
-    go sender(ws, ch)
-    go receiver(ws, res)
-    return &Client{0, ch, res}, nil
+    ret := new(Client)
+    ret.multiplex = NewStreamMultiplex(ws)
+    return ret, nil
 }
 
 func (c *Client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -157,7 +154,6 @@ func (c *Client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
     r.Write(session)
     io.Copy(w, session)
-    c.muliplix.Free(session.SessionID)
 
-    log.Printf("SESSION %d END\n", sessionID)
+    log.Printf("SESSION %d END\n", session.SessionID)
 }
