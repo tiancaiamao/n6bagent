@@ -2,11 +2,13 @@ package n6bagent
 
 import (
     "bufio"
-    "bytes"
+    // "bytes"
     "code.google.com/p/go.net/websocket"
-    "encoding/binary"
+    // "encoding/binary"
+    "github.com/hashicorp/yamux"
     "io"
     "log"
+    "net"
     "net/http"
     "net/url"
     "runtime/pprof"
@@ -61,78 +63,61 @@ func debugCallback(name string) func(http.ResponseWriter, *http.Request) {
     }
 }
 
-func worker(session uint32, r *http.Request, w chan<- []byte) {
-    log.Printf("SESSION %d BEGIN: %s %s\n", session, r.Method, r.URL.String())
-
-    switch r.Method {
-    case "CONNECT":
-        tunnelTraffic(r, w)
-    default:
-        resp, err := http.DefaultClient.Do(r)
-        if err != nil {
-            log.Println("client.Do error:", err)
-            return
-        }
-        defer resp.Body.Close()
-
-        buf := &bytes.Buffer{}
-        binary.Write(buf, binary.LittleEndian, session)
-        binary.Write(buf, binary.LittleEndian, uint32(0))
-
-        resp.Write(buf)
-
-        log.Printf("SESSION %d END size=%d\n", session, buf.Len()-8)
-
-        data := buf.Bytes()
-        binary.LittleEndian.PutUint32(data[4:], uint32(len(data)-8))
-
-        w <- data
+func worker(conn net.Conn) {
+    bufreader := bufio.NewReader(conn)
+    req, err := http.ReadRequest(bufreader)
+    if err != nil {
+        log.Println("read request error:", conn.RemoteAddr(), err)
+        return
     }
+    req.URL, err = url.Parse("http://" + req.Host + req.URL.String())
+    req.RequestURI = ""
+
+    log.Printf("SESSION %s BEGIN\n", conn.RemoteAddr())
+
+    if oconn, err := net.DialTimeout("tcp", req.Host, 5); err == nil {
+        go io.Copy(conn, oconn)
+        io.Copy(oconn, conn)
+    }
+
+    // if req, err := http.NewRequest(ireq.Method, ireq.URL.String(), ireq.Body); err == nil {
+    //      for k, values := range ireq.Header {
+    //          for _, v := range values {
+    //              req.Header.Add(k, v)
+    //          }
+    //      }
+    //      req.ContentLength = ireq.ContentLength
+    //      // do not follow any redirect， browser will do that
+    //      if resp, err := http.DefaultTransport.RoundTrip(req); err == nil {
+    //          for k, values := range resp.Header {
+    //              for _, v := range values {
+    //                  w.Header().Add(k, v)
+    //              }
+    //          }
+    //          defer resp.Body.Close()
+    //          w.WriteHeader(resp.StatusCode)
+    //          io.Copy(conn, resp.Body)
+    //      }
+    //  }
+
+    log.Printf("SESSION %d END\n", conn.RemoteAddr())
 }
 
 func websocketCallback(ws *websocket.Conn) {
-    ch := make(chan []byte)
-    go func(c <-chan []byte) {
-        for {
-            data := <-c
-            ws.Write(data)
-        }
-    }(ch)
-
-    buf := &bytes.Buffer{}
-
-    var session uint32
-    var size uint32
+    session, err := yamux.Server(ws, nil)
+    if err != nil {
+        log.Println("websocket serve error:", err)
+        ws.Close()
+    }
 
     for {
-        err := binary.Read(ws, binary.LittleEndian, &session)
+        conn, err := session.Accept()
         if err != nil {
-            ws.Close()
-            return
-        }
-        err = binary.Read(ws, binary.LittleEndian, &size)
-        if err != nil {
-            ws.Close()
-            return
-        }
-
-        buf.Reset()
-        _, err = io.CopyN(buf, ws, int64(size))
-        if err != nil {
-            log.Println("read websocket error:", session, err)
+            log.Println("session Accept error:", err)
             continue
         }
 
-        bufreader := bufio.NewReader(buf)
-        req, err := http.ReadRequest(bufreader)
-        if err != nil {
-            log.Println("read request error:", session, err)
-            continue
-        }
-        req.URL, err = url.Parse("http://" + req.Host + req.URL.String())
-        req.RequestURI = ""
-
-        go worker(session, req, ch)
+        go worker(conn)
     }
 }
 
@@ -158,21 +143,21 @@ func (s *Server) fetchDirectly(w http.ResponseWriter, ireq *http.Request) {
     }
 }
 
-func (s *Server) tunnelTraffic(w http.ResponseWriter, r *http.Request) {
-    w.WriteHeader(200)
-
-    if iconn, _, err := w.(http.Hijacker).Hijack(); err == nil {
-        proxy := s.getProxy()
-        log.Printf("socks tunnel by %v: %v", proxy.Addr, r.URL.Host)
-
-        if oconn, err := proxy.Dial(Timeout, r.URL.Host); err == nil {
-            go copyConn(iconn, oconn)
-            go copyConn(oconn, iconn)
-        } else {
-            log.Println("dial socks server %v, error: %v", proxy.Addr, err)
-            iconn.Close()
-        }
-    } else {
-        http.Error(w, err.Error(), http.StatusInternalServerError)
-    }
-}
+// func (s *Server) tunnelTraffic(w http.ResponseWriter, r *http.Request) {
+//		 w.WriteHeader(200)
+//
+//		 if iconn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+//				 proxy := s.getProxy()
+//				 log.Printf("socks tunnel by %v: %v", proxy.Addr, r.URL.Host)
+//
+//				 if oconn, err := proxy.Dial(Timeout, r.URL.Host); err == nil {
+//						 go copyConn(iconn, oconn)
+//						 go copyConn(oconn, iconn)
+//				 } else {
+//						 log.Println("dial socks server %v, error: %v", proxy.Addr, err)
+//						 iconn.Close()
+//				 }
+//		 } else {
+//				 http.Error(w, err.Error(), http.StatusInternalServerError)
+//		 }
+// }

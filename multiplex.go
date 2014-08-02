@@ -79,34 +79,36 @@ func (mux *StreamMultiplex) backgroundRead(reader io.Reader) {
     var sessionID uint32
     var size uint32
 
-    err := binary.Read(reader, binary.LittleEndian, &sessionID)
-    if err != nil {
-        return
-    }
-    err = binary.Read(reader, binary.LittleEndian, &size)
-    if err != nil {
-        return
-    }
-
-    if sessionID == 0 {
-        mux.readCommand(reader, size)
-    } else {
-        s := &Session{}
-        var ok bool
-
-        mux.Lock()
-        s, ok = mux.sessions[sessionID]
-        mux.Unlock()
-
-        if !ok || s == nil {
-            log.Println("backgroundRead error: read a non-exist session")
-            ioutil.ReadAll(io.LimitReader(reader, int64(size))) // read and drop data
-            continue
+    for {
+        err := binary.Read(reader, binary.LittleEndian, &sessionID)
+        if err != nil {
+            return
+        }
+        err = binary.Read(reader, binary.LittleEndian, &size)
+        if err != nil {
+            return
         }
 
-        data := make([]byte, size)
-        reader.Read(data)
-        s.readCh <- data
+        if sessionID == 0 {
+            mux.readCommand(reader, size)
+        } else {
+            s := &Session{}
+            var ok bool
+
+            mux.Lock()
+            s, ok = mux.sessions[sessionID]
+            mux.Unlock()
+
+            if !ok || s == nil {
+                log.Println("backgroundRead error: read a non-exist session")
+                ioutil.ReadAll(io.LimitReader(reader, int64(size))) // read and drop data
+                continue
+            }
+
+            data := make([]byte, size)
+            reader.Read(data)
+            s.readCh <- data
+        }
     }
 }
 

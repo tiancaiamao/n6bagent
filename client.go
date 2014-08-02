@@ -6,6 +6,7 @@ import (
     "code.google.com/p/go.net/websocket"
     "encoding/binary"
     "errors"
+    "github.com/hashicorp/yamux"
     // "fmt"
     "io"
     "io/ioutil"
@@ -131,7 +132,7 @@ func receiver(ws *websocket.Conn, res *Result) {
 }
 
 type Client struct {
-    multiplex *StreamMultiplex
+    multiplex *yamux.Session
 }
 
 func NewClient(hostAddr string) (*Client, error) {
@@ -144,16 +145,46 @@ func NewClient(hostAddr string) (*Client, error) {
     }
 
     ret := new(Client)
-    ret.multiplex = NewStreamMultiplex(ws)
-    return ret, nil
+    ret.multiplex, err = yamux.Client(ws, nil)
+    return ret, err
 }
 
 func (c *Client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-    session := c.multiplex.New()
-    log.Printf("SESSION %d BEGIN: %s %s\n", session.SessionID, r.Method, r.URL.String())
+    conn, err := c.multiplex.Open()
+    if err != nil {
+        // 写500内部错误
+        return
+    }
 
-    r.Write(session)
-    io.Copy(w, session)
+    log.Printf("SESSION %d BEGIN: %s %s\n", conn.LocalAddr(), r.Method, r.URL.String())
 
-    log.Printf("SESSION %d END\n", session.SessionID)
+    w.WriteHeader(200)
+
+    if iconn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+        go io.Copy(iconn, conn)
+        io.Copy(conn, iconn)
+    } else {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+    }
+
+    log.Printf("SESSION %d END\n", conn.LocalAddr())
 }
+
+// func (s *Server) tunnelTraffic(w http.ResponseWriter, r *http.Request) {
+//     w.WriteHeader(200)
+//
+//     if iconn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+//         proxy := s.getProxy()
+//         log.Printf("socks tunnel by %v: %v", proxy.Addr, r.URL.Host)
+//
+//         if oconn, err := proxy.Dial(Timeout, r.URL.Host); err == nil {
+//             go copyConn(iconn, oconn)
+//             go copyConn(oconn, iconn)
+//         } else {
+//             log.Println("dial socks server %v, error: %v", proxy.Addr, err)
+//             iconn.Close()
+//         }
+//     } else {
+//         http.Error(w, err.Error(), http.StatusInternalServerError)
+//     }
+// }
