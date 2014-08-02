@@ -131,18 +131,11 @@ func receiver(ws *websocket.Conn, res *Result) {
     }
 }
 
-var ()
-
 type Client struct {
-    session uint32
-    Ch      chan []byte
-    Res     *Result
+    multiplex *StreamMultiplex
 }
 
 func NewClient(hostAddr string) (*Client, error) {
-    ch := make(chan []byte)
-    res := newResult()
-
     origin := "http://" + hostAddr + "/"
     url := "ws://" + hostAddr + "/websocket"
 
@@ -151,30 +144,20 @@ func NewClient(hostAddr string) (*Client, error) {
         return nil, err
     }
 
+    multiplex := NewStreamMultiplex(ws)
+
     go sender(ws, ch)
     go receiver(ws, res)
     return &Client{0, ch, res}, nil
 }
 
 func (c *Client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-    sessionID := atomic.AddUint32(&c.session, 1)
-    log.Printf("SESSION %d BEGIN: %s %s\n", sessionID, r.Method, r.URL.String())
+    session := c.multiplex.New()
+    log.Printf("SESSION %d BEGIN: %s %s\n", session.SessionID, r.Method, r.URL.String())
 
-    buf := &bytes.Buffer{}
-    binary.Write(buf, binary.LittleEndian, sessionID)
-    binary.Write(buf, binary.LittleEndian, uint32(0))
-    r.Write(buf)
+    r.Write(session)
+    io.Copy(w, session)
+    c.muliplix.Free(session.SessionID)
 
-    b := buf.Bytes()
-    binary.LittleEndian.PutUint32(b[4:], uint32(len(b)-8))
-
-    wait := make(chan struct{})
-    // 等待返回结束
-    c.Res.Put(sessionID, &Cell{
-        w, r, wait,
-    })
-
-    c.Ch <- b
-    <-wait
     log.Printf("SESSION %d END\n", sessionID)
 }

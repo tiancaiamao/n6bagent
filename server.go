@@ -9,9 +9,7 @@ import (
     "log"
     "net/http"
     "net/url"
-    // "os"
     "runtime/pprof"
-    // "time"
 )
 
 const html = `
@@ -66,25 +64,30 @@ func debugCallback(name string) func(http.ResponseWriter, *http.Request) {
 func worker(session uint32, r *http.Request, w chan<- []byte) {
     log.Printf("SESSION %d BEGIN: %s %s\n", session, r.Method, r.URL.String())
 
-    resp, err := http.DefaultClient.Do(r)
-    if err != nil {
-        log.Println("client.Do error:", err)
-        return
+    switch r.Method {
+    case "CONNECT":
+        tunnelTraffic(r, w)
+    default:
+        resp, err := http.DefaultClient.Do(r)
+        if err != nil {
+            log.Println("client.Do error:", err)
+            return
+        }
+        defer resp.Body.Close()
+
+        buf := &bytes.Buffer{}
+        binary.Write(buf, binary.LittleEndian, session)
+        binary.Write(buf, binary.LittleEndian, uint32(0))
+
+        resp.Write(buf)
+
+        log.Printf("SESSION %d END size=%d\n", session, buf.Len()-8)
+
+        data := buf.Bytes()
+        binary.LittleEndian.PutUint32(data[4:], uint32(len(data)-8))
+
+        w <- data
     }
-    defer resp.Body.Close()
-
-    buf := &bytes.Buffer{}
-    binary.Write(buf, binary.LittleEndian, session)
-    binary.Write(buf, binary.LittleEndian, uint32(0))
-
-    resp.Write(buf)
-
-    log.Printf("SESSION %d END size=%d\n", session, buf.Len()-8)
-
-    data := buf.Bytes()
-    binary.LittleEndian.PutUint32(data[4:], uint32(len(data)-8))
-
-    w <- data
 }
 
 func websocketCallback(ws *websocket.Conn) {
@@ -130,5 +133,46 @@ func websocketCallback(ws *websocket.Conn) {
         req.RequestURI = ""
 
         go worker(session, req, ch)
+    }
+}
+
+func (s *Server) fetchDirectly(w http.ResponseWriter, ireq *http.Request) {
+    if req, err := http.NewRequest(ireq.Method, ireq.URL.String(), ireq.Body); err == nil {
+        for k, values := range ireq.Header {
+            for _, v := range values {
+                req.Header.Add(k, v)
+            }
+        }
+        req.ContentLength = ireq.ContentLength
+        // do not follow any redirect， browser will do that
+        if resp, err := http.DefaultTransport.RoundTrip(req); err == nil {
+            for k, values := range resp.Header {
+                for _, v := range values {
+                    w.Header().Add(k, v)
+                }
+            }
+            defer resp.Body.Close()
+            w.WriteHeader(resp.StatusCode)
+            io.Copy(w, resp.Body)
+        }
+    }
+}
+
+func (s *Server) tunnelTraffic(w http.ResponseWriter, r *http.Request) {
+    w.WriteHeader(200)
+
+    if iconn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+        proxy := s.getProxy()
+        log.Printf("socks tunnel by %v: %v", proxy.Addr, r.URL.Host)
+
+        if oconn, err := proxy.Dial(Timeout, r.URL.Host); err == nil {
+            go copyConn(iconn, oconn)
+            go copyConn(oconn, iconn)
+        } else {
+            log.Println("dial socks server %v, error: %v", proxy.Addr, err)
+            iconn.Close()
+        }
+    } else {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
     }
 }
