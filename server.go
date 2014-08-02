@@ -64,6 +64,7 @@ func debugCallback(name string) func(http.ResponseWriter, *http.Request) {
 }
 
 func worker(conn net.Conn) {
+    log.Println("run here...")
     bufreader := bufio.NewReader(conn)
     req, err := http.ReadRequest(bufreader)
     if err != nil {
@@ -76,8 +77,8 @@ func worker(conn net.Conn) {
     log.Printf("SESSION %s BEGIN\n", conn.RemoteAddr())
 
     if oconn, err := net.DialTimeout("tcp", req.Host, 5); err == nil {
-        go io.Copy(conn, oconn)
-        io.Copy(oconn, conn)
+        go copyConn(conn, oconn)
+        go copyConn(oconn, conn)
     }
 
     // if req, err := http.NewRequest(ireq.Method, ireq.URL.String(), ireq.Body); err == nil {

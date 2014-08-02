@@ -11,6 +11,7 @@ import (
     "io"
     "io/ioutil"
     "log"
+    "net"
     "net/http"
     // "os"
     "sync"
@@ -152,22 +153,35 @@ func NewClient(hostAddr string) (*Client, error) {
 func (c *Client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
     conn, err := c.multiplex.Open()
     if err != nil {
-        // 写500内部错误
+        http.Error(w, err.Error(), http.StatusInternalServerError)
         return
     }
 
-    log.Printf("SESSION %d BEGIN: %s %s\n", conn.LocalAddr(), r.Method, r.URL.String())
+    log.Printf("SESSION %s BEGIN: %s %s\n", conn.LocalAddr(), r.Method, r.URL.String())
 
     w.WriteHeader(200)
 
     if iconn, _, err := w.(http.Hijacker).Hijack(); err == nil {
-        go io.Copy(iconn, conn)
-        io.Copy(conn, iconn)
+        go copyConn(iconn, conn)
+        go copyConn(conn, iconn)
     } else {
         http.Error(w, err.Error(), http.StatusInternalServerError)
     }
 
     log.Printf("SESSION %d END\n", conn.LocalAddr())
+}
+
+func copyConn(iconn net.Conn, oconn net.Conn) {
+    buffer := [4096]byte{}
+    defer iconn.Close()
+    defer oconn.Close()
+    for {
+        if n, err := iconn.Read(buffer[:]); err == nil {
+            oconn.Write(buffer[:n])
+        } else {
+            return
+        }
+    }
 }
 
 // func (s *Server) tunnelTraffic(w http.ResponseWriter, r *http.Request) {
