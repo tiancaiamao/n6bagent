@@ -1,5 +1,5 @@
 {
 	"ImportPath": "github.com/tiancaiamao/n6bagent",
-	"GoVersion": "go1.2.2",
+	"GoVersion": "devel +d50ba39e60ab Thu Aug 07 13:34:30 2014 +0400",
 	"Deps": []
 }
