@@ -24,7 +24,7 @@ func websocketCallback(ws *websocket.Conn) {
     }
 
     proxy := goproxy.NewProxyHttpServer()
-    // proxy.Verbose = true
+    proxy.Verbose = true
     err = http.Serve(session, proxy)
     if err != nil {
         log.Println("Serve error:", err)
@@ -34,7 +34,7 @@ func websocketCallback(ws *websocket.Conn) {
 }
 
 func main() {
-    var port = os.Getenv("PORT")
+    port := os.Getenv("PORT")
     if port == "" {
         port = "8080"
     }
