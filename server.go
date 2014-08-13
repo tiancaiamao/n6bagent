@@ -33,9 +33,14 @@ func websocketCallback(ws *websocket.Conn) {
 }
 
 func main() {
+    var port = os.Getenv("PORT")
+    if port == "" {
+        port = "8080"
+    }
+
     http.HandleFunc("/", indexCallback)
     http.Handle("/websocket", websocket.Handler(websocketCallback))
-    http.ListenAndServe(":8080", nil)
+    http.ListenAndServe(":"+port, nil)
 }
 
 const html = `
