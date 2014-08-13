@@ -1,5 +1,19 @@
 {
 	"ImportPath": "github.com/tiancaiamao/n6bagent",
-	"GoVersion": "devel +d50ba39e60ab Thu Aug 07 13:34:30 2014 +0400",
-	"Deps": []
+	"GoVersion": "go1.2.2",
+	"Deps": [
+		{
+			"ImportPath": "code.google.com/p/go.net/websocket",
+			"Comment": "null-137",
+			"Rev": "335bcad0b70a3ba61b9951992a418c9176a73fd4"
+		},
+		{
+			"ImportPath": "github.com/elazarl/goproxy",
+			"Rev": "d22ae1ac3bedf394a9c830e01f95457b060dcf85"
+		},
+		{
+			"ImportPath": "github.com/hashicorp/yamux",
+			"Rev": "35417c7dfab4085d7c921b33e4d5ea6cf9ceef65"
+		}
+	]
 }
